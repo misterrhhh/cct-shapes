@@ -1,0 +1,22 @@
+{
+  "name": "cct-shapes",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsc && node dist/server.js",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "csgogsi": "^4.1.2",
+    "express": "^4.21.2",
+    "obs-websocket-js": "^5.0.6"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.14",
+    "typescript": "^5.8.3"
+  }
+}
