@@ -3,9 +3,15 @@ import { CSGO, CSGOGSI } from "csgogsi";
 import { OBSWebSocket } from "obs-websocket-js";
 
 type ShapeInsert = "L" | "U";
+type ObsTarget = {
+  client: OBSWebSocket;
+  connectionPromise: Promise<void> | null;
+  isConnected: boolean;
+  password?: string;
+  url: string;
+};
 
 const GSI = new CSGOGSI();
-const obs = new OBSWebSocket();
 const app = express();
 
 const port = 1906;
@@ -17,11 +23,29 @@ const shapeInsertDurationMs = Number.isFinite(defaultInsertDurationMs) && defaul
   ? defaultInsertDurationMs
   : 10_000;
 
-const obsWebSocketUrl = process.env.OBS_WS_URL ?? "ws://192.168.1.82:4455";
-const obsWebSocketPassword = process.env.OBS_WS_PASSWORD ?? "";
+const parseCsvEnv = (value: string | undefined): string[] => {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+};
+
+const obsWebSocketUrls = parseCsvEnv(process.env.OBS_WS_URLS ?? process.env.OBS_WS_URL ?? "ws://192.168.1.82:4455");
+const obsWebSocketPasswords = parseCsvEnv(process.env.OBS_WS_PASSWORDS ?? process.env.OBS_WS_PASSWORD ?? "");
 const encodingScene = process.env.OBS_ENCODING_SCENE ?? "Encoding";
 const uShapeScene = process.env.OBS_U_SHAPE_SCENE ?? "Encoding_U_Shape";
 const lShapeScene = process.env.OBS_L_SHAPE_SCENE ?? "Encoding_L_Shape";
+const obsTargets: ObsTarget[] = obsWebSocketUrls.map((url, index) => ({
+  client: new OBSWebSocket(),
+  connectionPromise: null,
+  isConnected: false,
+  password: obsWebSocketPasswords[index] ?? obsWebSocketPasswords[0] ?? undefined,
+  url
+}));
 
 const regulationSchedule = new Map<number, ShapeInsert>([
   [3, "U"],
@@ -31,8 +55,6 @@ const regulationSchedule = new Map<number, ShapeInsert>([
   [22, "U"]
 ]);
 
-let isObsConnected = false;
-let obsConnectionPromise: Promise<void> | null = null;
 let activeSceneReset: NodeJS.Timeout | null = null;
 let lastTriggeredRound: number | null = null;
 let lastObservedRound = 0;
@@ -139,42 +161,65 @@ const getSceneNameForInsert = (shapeInsert: ShapeInsert): string => {
   return shapeInsert === "U" ? uShapeScene : lShapeScene;
 };
 
-const ensureObsConnection = async (): Promise<void> => {
-  if (isObsConnected) {
+const ensureObsConnection = async (target: ObsTarget): Promise<void> => {
+  if (target.isConnected) {
     return;
   }
 
-  if (!obsConnectionPromise) {
-    obsConnectionPromise = obs
-      .connect(obsWebSocketUrl, obsWebSocketPassword || undefined)
+  if (!target.connectionPromise) {
+    target.connectionPromise = target.client
+      .connect(target.url, target.password || undefined)
       .then(() => {
-        isObsConnected = true;
-        console.log(`Connected to OBS at ${obsWebSocketUrl}`);
+        target.isConnected = true;
+        console.log(`Connected to OBS at ${target.url}`);
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
-        isObsConnected = false;
-        throw new Error(`Unable to connect to OBS: ${message}`);
+        target.isConnected = false;
+        throw new Error(`Unable to connect to OBS at ${target.url}: ${message}`);
       })
       .finally(() => {
-        obsConnectionPromise = null;
+        target.connectionPromise = null;
       });
   }
 
-  await obsConnectionPromise;
+  await target.connectionPromise;
 };
 
-const setProgramScene = async (sceneName: string): Promise<void> => {
-  await ensureObsConnection();
+const setProgramSceneOnTarget = async (target: ObsTarget, sceneName: string): Promise<void> => {
+  await ensureObsConnection(target);
 
   try {
-    await obs.call("SetCurrentProgramScene", {
+    await target.client.call("SetCurrentProgramScene", {
       sceneName
     });
   } catch (error) {
-    isObsConnected = false;
+    target.isConnected = false;
     throw error;
   }
+};
+
+const setProgramScene = async (sceneName: string): Promise<void> => {
+  const results = await Promise.allSettled(
+    obsTargets.map((target) => setProgramSceneOnTarget(target, sceneName))
+  );
+
+  const failures = results.flatMap((result) => {
+    if (result.status === "fulfilled") {
+      return [];
+    }
+
+    const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+    return [message];
+  });
+
+  if (failures.length === obsTargets.length) {
+    throw new Error(failures.join(" | "));
+  }
+
+  failures.forEach((message) => {
+    console.error(`OBS target failed for scene ${sceneName}:`, message);
+  });
 };
 
 const triggerObsShapeInsert = async (shapeInsert: ShapeInsert, durationMs: number): Promise<void> => {
@@ -204,5 +249,5 @@ const triggerObsShapeInsert = async (shapeInsert: ShapeInsert, durationMs: numbe
 
 app.listen(port, () => {
   console.log(`Listening for POST requests at http://localhost:${port}/gsi/input`);
-  console.log(`OBS target: ${obsWebSocketUrl}`);
+  console.log(`OBS targets: ${obsTargets.map((target) => target.url).join(", ")}`);
 });
