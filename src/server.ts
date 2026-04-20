@@ -64,6 +64,7 @@ app.use(express.json({ limit: "1mb" }));
 app.post("/gsi/input", async (req: Request, res: Response) => {
   const digested = GSI.digest(req.body);
 
+
   if (!digested) {
     res.status(400).json({
       ok: false,
@@ -110,13 +111,20 @@ const getCompletedRounds = (gameState: CSGO): number => {
 };
 
 const handleShapeInsert = async (gameState: CSGO, currentRound: number): Promise<void> => {
-  if (currentRound < lastObservedRound || gameState.phase_countdowns.phase === "warmup") {
+  const phase = gameState.phase_countdowns.phase;
+  const phaseEndsIn = gameState.phase_countdowns.phase_ends_in;
+
+  if (currentRound < lastObservedRound || phase === "warmup") {
     lastTriggeredRound = null;
   }
 
   lastObservedRound = currentRound;
 
-  if (gameState.phase_countdowns.phase !== "freezetime") {
+  if (phase !== "freezetime") {
+    return;
+  }
+
+  if (phaseEndsIn > 5) {
     return;
   }
 
