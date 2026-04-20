@@ -14,7 +14,7 @@ type ObsTarget = {
 const GSI = new CSGOGSI();
 const app = express();
 
-const port = 1906;
+const port = 9901;
 const regulationMaxRounds = 24;
 const overtimeBlockSize = 6;
 const regulationEndScoreTotal = 24;
